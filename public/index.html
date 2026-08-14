@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>ANOCALL - Jaring Taktis Modern</title>
+  <link rel="manifest" href="/manifest.json">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
+
+  <style>
+    * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+    body {
+      background-color: #050505;
+      background-image:
+        radial-gradient(circle at 50% 50%, rgba(234, 179, 8, 0.05) 0%, transparent 60%),
+        linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+      background-size: 100% 100%, 30px 30px, 30px 30px;
+    }
+    @keyframes spin-slow { 100% { transform: rotate(360deg); } }
+    @keyframes pulse-glow {
+      0%, 100% { filter: drop-shadow(0 0 8px rgba(234, 179, 8, 0.4)); }
+      50% { filter: drop-shadow(0 0 20px rgba(234, 179, 8, 0.9)); }
+    }
+    .animate-spin-slow { animation: spin-slow 10s linear infinite; }
+    .animate-pulse-glow { animation: pulse-glow 3s ease-in-out infinite; }
+    @keyframes wave {
+      0%, 100% { height: 8px; }
+      50% { height: 24px; }
+    }
+    .wave-bar {
+      width: 4px; background: #eab308; border-radius: 2px;
+      animation: wave 1s ease-in-out infinite; display: none;
+    }
+    .wave-bar:nth-child(2) { animation-delay: 0.2s; }
+    .wave-bar:nth-child(3) { animation-delay: 0.4s; }
+    .wave-bar:nth-child(4) { animation-delay: 0.6s; }
+    .is-talking .wave-bar { display: block; }
+    .is-talking .status-dot { display: none; }
+    @keyframes ripple-ptt {
+      0% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.7), 0 0 0 0 rgba(220, 38, 38, 0.7); }
+      100% { box-shadow: 0 0 0 20px rgba(220, 38, 38, 0), 0 0 0 40px rgba(220, 38, 38, 0); }
+    }
+    .ptt-active {
+      animation: ripple-ptt 1.5s infinite linear;
+      background: linear-gradient(145deg, #ef4444, #b91c1c) !important;
+      transform: scale(0.95);
+    }
+    .glass-panel {
+      background: rgba(15, 15, 15, 0.7);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(234, 179, 8, 0.2);
+      box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.8), 0 8px 32px rgba(0, 0, 0, 0.5);
+    }
+  </style>
+</head>
+<body class="text-gray-200 h-screen w-screen overflow-hidden font-mono flex flex-col items-center uppercase selection:bg-yellow-500 selection:text-black">
+
+  <!-- AUDIO ELEMENT UNTUK BACKGROUND PWA KEEP-ALIVE -->
+  <audio id="bg-audio" loop preload="auto" playsinline>
+    <source src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=" type="audio/wav">
+  </audio>
+
+  <!-- LAYAR LOGIN -->
+  <div id="login-screen" class="flex flex-col items-center justify-center h-full w-full max-w-sm px-6 relative z-10">
+    <div class="mb-12 text-center flex flex-col items-center">
+      <div class="relative w-32 h-32 mb-6 animate-pulse-glow flex items-center justify-center">
+        <svg viewBox="0 0 100 100" class="w-full h-full absolute top-0 left-0">
+          <circle cx="50" cy="50" r="46" fill="none" stroke="#eab308" stroke-width="1" stroke-dasharray="4 4" class="animate-spin-slow" opacity="0.8"/>
+          <circle cx="50" cy="50" r="38" fill="none" stroke="#eab308" stroke-width="2" opacity="0.3"/>
+          <path d="M 50 15 L 85 35 L 85 65 L 50 85 L 15 65 L 15 35 Z" fill="rgba(234, 179, 8, 0.05)" stroke="#eab308" stroke-width="2"/>
+        </svg>
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 text-yellow-500 z-10" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
+        </svg>
+      </div>
+      <h1 class="text-4xl font-black tracking-[0.2em] text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 to-yellow-600 drop-shadow-lg">ANOCALL</h1>
+      <p class="text-[10px] text-yellow-500 mt-2 font-bold tracking-[0.4em] opacity-80">SECURE TACTICAL NET</p>
+    </div>
+
+    <div class="w-full glass-panel p-8 rounded-xl relative overflow-hidden">
+      <div class="absolute top-0 left-0 w-8 h-8 border-t-2 border-l-2 border-yellow-500 rounded-tl-xl opacity-70"></div>
+      <div class="absolute bottom-0 right-0 w-8 h-8 border-b-2 border-r-2 border-yellow-500 rounded-br-xl opacity-70"></div>
+
+      <div class="space-y-5 relative z-10">
+        <div class="relative">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 absolute top-4 left-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+          <input type="text" id="username" placeholder="CALLSIGN BEBAS" class="w-full py-4 pl-12 pr-4 bg-black/50 border border-gray-700 rounded-lg text-yellow-500 focus:border-yellow-500 focus:bg-black/80 focus:ring-1 focus:ring-yellow-500 outline-none transition-all text-sm tracking-widest">
+        </div>
+        <div class="relative">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 absolute top-4 left-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+          <input type="password" id="password" placeholder="KODE AKSES" class="w-full py-4 pl-12 pr-4 bg-black/50 border border-gray-700 rounded-lg text-yellow-500 focus:border-yellow-500 focus:bg-black/80 focus:ring-1 focus:ring-yellow-500 outline-none transition-all text-sm tracking-widest">
+        </div>
+        <button onclick="login()" class="w-full mt-4 bg-gradient-to-r from-red-700 to-red-600 hover:from-red-600 hover:to-red-500 text-white py-4 rounded-lg font-bold text-sm tracking-[0.2em] shadow-[0_0_15px_rgba(220,38,38,0.4)] transition-all active:scale-95 border border-red-500/50">
+          OTORISASI JARINGAN
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- LAYAR HT -->
+  <div id="ht-screen" class="hidden flex-col h-full w-full max-w-md bg-[#0a0a0a] relative z-10 border-x border-gray-900 shadow-2xl shadow-yellow-900/20">
+    <div class="flex justify-between items-center px-6 py-4 glass-panel border-b border-yellow-600/30">
+      <div class="flex items-center gap-4">
+        <div class="relative">
+          <div class="absolute inset-0 bg-yellow-500 blur-sm opacity-50 rounded-full"></div>
+          <div class="w-12 h-12 bg-gradient-to-br from-yellow-400 to-yellow-600 text-black flex items-center justify-center font-black text-xl rounded-full relative z-10 border-2 border-black">
+            <span id="avatar-initial">C</span>
+          </div>
+        </div>
+        <div class="flex flex-col">
+          <span class="font-bold text-base tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 to-white" id="user-display">CALLSIGN</span>
+          <div class="flex items-center gap-2 mt-1">
+            <span class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span>
+            <span class="text-[9px] text-green-500 font-bold tracking-[0.2em]" id="role-display">ONLINE</span>
+          </div>
+        </div>
+      </div>
+      <button onclick="logout()" class="p-3 bg-black/50 rounded-full border border-gray-800 text-gray-500 hover:text-red-500 hover:border-red-500 hover:bg-red-500/10 transition-all group">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 group-hover:-rotate-90 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
+      </button>
+    </div>
+
+    <div class="flex-1 flex flex-col px-6 py-8 overflow-y-auto bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')]">
+      <div class="glass-panel p-1 rounded-xl mb-8 group">
+        <div class="bg-black/80 p-5 rounded-lg border border-gray-800 group-hover:border-yellow-600/50 transition-colors">
+          <div class="flex justify-between items-center mb-3">
+            <label class="text-[10px] text-yellow-600 font-bold tracking-[0.2em] flex items-center gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" /></svg>
+              FREKUENSI
+            </label>
+            <span class="text-[9px] text-gray-500">ENCRYPTED 256-bit</span>
+          </div>
+          <div class="relative">
+            <select id="channel-select" onchange="changeChannel()" class="w-full p-4 bg-gradient-to-b from-gray-900 to-black rounded border border-gray-700 text-yellow-500 font-bold text-center tracking-widest appearance-none outline-none focus:border-yellow-400 focus:shadow-[0_0_10px_rgba(234,179,8,0.3)] transition-all"></select>
+            <div class="absolute inset-y-0 right-4 flex items-center pointer-events-none text-yellow-500">▼</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex-1 flex flex-col justify-center items-center">
+        <div id="status-talk" class="glass-panel rounded-full px-8 py-4 w-full flex items-center justify-center gap-4 transition-all duration-300 border border-gray-800">
+          <div class="flex gap-1 h-6 items-center w-8 justify-center">
+            <span id="status-dot" class="w-2.5 h-2.5 bg-gray-500 rounded-full animate-pulse status-dot"></span>
+            <div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div>
+          </div>
+          <span id="status-text" class="text-gray-400 text-xs font-bold tracking-[0.2em]">STANDBY NETWORK</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="w-full pb-10 pt-6 flex flex-col items-center glass-panel border-t border-gray-800/50">
+      <p class="text-[9px] text-gray-500 mb-6 tracking-[0.2em] font-bold">/// PUSH TO TALK ///</p>
+      <button id="ptt-btn" oncontextmenu="return false;" class="relative w-36 h-36 rounded-full bg-gradient-to-b from-red-600 to-red-800 shadow-[0_10px_30px_rgba(220,38,38,0.4),inset_0_2px_0_rgba(255,255,255,0.3)] flex items-center justify-center border-[10px] border-[#151515] transition-all duration-200 outline-none group">
+        <div class="absolute inset-0 rounded-full border-2 border-red-400/30 group-active:border-transparent transition-all"></div>
+        <div class="relative z-10 flex flex-col items-center">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-14 w-14 text-white drop-shadow-lg group-active:scale-95 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
+          </svg>
+        </div>
+      </button>
+    </div>
+  </div>
+
+  <script>
+  let currentUser = null;
+  let currentChannel = 'KESATUAN';
+  let currentSubscribedTopic = null;
+  let isBroadcasting = false;
+  let resetStatusTimer = null;
+
+  let client = null;
+  const MQTT_BROKER = 'wss://broker.emqx.io:8084/mqtt';
+  const TOPIC_BASE = 'anocall_brimob_taktis/channel/';
+
+  let audioContext;
+  let audioStreamSource;
+  let audioProcessor;
+  let silenceNode;
+  let nextPlayTime = 0;
+  let globalStream = null;
+
+  let wakeLock = null;
+  const requestWakeLock = async () => {
+    try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (err) {}
+  };
+  document.addEventListener('visibilitychange', async () => {
+    if (wakeLock !== null && document.visibilityState === 'visible') await requestWakeLock();
+  });
+  requestWakeLock();
+
+  // Daftarkan Media Session agar OS mengira aplikasi ini sedang aktif memutar media
+  function setupMediaSession() {
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: 'STANDBY JARINGAN',
+        artist: 'ANOCALL TAKTIS',
+        album: currentChannel,
+        artwork: [
+          { src: 'https://cdn-icons-png.flaticon.com/512/3264/3264107.png', sizes: '512x512', type: 'image/png' }
+        ]
+      });
+      // Berikan aksi kosong agar kontrol media di lockscreen tetap muncul
+      navigator.mediaSession.setActionHandler('play', () => { document.getElementById('bg-audio').play(); });
+      navigator.mediaSession.setActionHandler('pause', () => { /* abaikan agar tidak bisa dipause dari luar */ });
+    }
+  }
+
+  async function login() {
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value.trim();
+    if(!username || !password) return alert("Callsign & Kode Akses wajib diisi!");
+
+    if (password !== '12356') {
+      return alert("AKSES DITOLAK: Callsign dan Kode Akses tidak sinkron!");
+    }
+
+    try {
+      // Putar audio kosong agar hidup di background
+      const bgAudio = document.getElementById('bg-audio');
+      bgAudio.volume = 0.01;
+      await bgAudio.play().catch(e => console.log("Auto-play terblokir, butuh interaksi user."));
+
+      currentUser = username.toUpperCase();
+      const role = currentUser.includes('KODAL') ? 'admin' : 'anggota';
+
+      document.getElementById('login-screen').classList.add('hidden');
+      document.getElementById('ht-screen').classList.remove('hidden');
+      document.getElementById('ht-screen').classList.add('flex');
+
+      document.getElementById('user-display').innerText = currentUser;
+      document.getElementById('avatar-initial').innerText = currentUser.substring(0, 2).toUpperCase();
+      document.getElementById('role-display').innerText = role === 'admin' ? 'KODAL' : 'ANGGOTA';
+
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      audioContext = new AudioContextClass();
+      if (audioContext.state === 'suspended') audioContext.resume();
+
+      await loadChannels();
+      setupMediaSession();
+      initMqttConnection();
+      initAudioSystem();
+    } catch (error) { alert("Gagal Memulai Sistem Audio/Jaringan!"); }
+  }
+
+  function logout() { location.reload(); }
+
+  async function loadChannels() {
+    const channels = [
+      'KESATUAN', 
+      'PAM IBUKOTA', 
+      'PAM 1', 
+      'PAM 2', 
+      'OPS 1', 
+      'OPS 2', 
+      'SATGAS 1', 
+      'SATGAS 2', 
+      'SPP', 
+      'BKO'
+    ];
+    const select = document.getElementById('channel-select');
+    select.innerHTML = '';
+
+    channels.forEach(ch => {
+      const opt = document.createElement('option');
+      opt.value = ch;
+      opt.innerText = `[ CH ] ${ch}`;
+      select.appendChild(opt);
+    });
+    if(channels.length > 0) currentChannel = channels[0];
+  }
+
+  function initMqttConnection() {
+    updateStatus('MENGHUBUNGKAN...', 'border-yellow-500/50', 'bg-yellow-500', 'text-yellow-500');
+
+    client = mqtt.connect(MQTT_BROKER, {
+      clientId: 'anocall_' + Math.random().toString(16).substr(2, 8),
+      keepalive: 60
+    });
+
+    client.on('connect', () => {
+      subscribeToChannel(currentChannel);
+      updateStatus('STANDBY NETWORK', 'border-gray-800', 'bg-gray-500', 'text-gray-400');
+    });
+
+    client.on('message', (topic, message) => {
+      if (isBroadcasting) return;
+      if (topic !== TOPIC_BASE + currentChannel) return;
+
+      try {
+        const payload = JSON.parse(message.toString());
+        if (payload.sender !== currentUser && payload.type === 'live-audio') {
+          updateStatus(`RX: ${payload.sender}`, 'border-yellow-500/50 shadow-[0_0_15px_rgba(234,179,8,0.2)]', 'bg-yellow-400', 'text-yellow-400', true);
+
+          const binaryString = atob(payload.chunk);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) { bytes[i] = binaryString.charCodeAt(i); }
+
+          const int16Data = new Int16Array(bytes.buffer);
+          const float32Data = new Float32Array(int16Data.length);
+          for (let i = 0; i < int16Data.length; i++) { float32Data[i] = int16Data[i] / 32767.0; }
+
+          const buffer = audioContext.createBuffer(1, float32Data.length, 16000);
+          buffer.getChannelData(0).set(float32Data);
+
+          const source = audioContext.createBufferSource();
+          source.buffer = buffer;
+          source.connect(audioContext.destination);
+
+          if (nextPlayTime < audioContext.currentTime) nextPlayTime = audioContext.currentTime + 0.05;
+          source.start(nextPlayTime);
+          nextPlayTime += buffer.duration;
+
+          clearTimeout(resetStatusTimer);
+          resetStatusTimer = setTimeout(() => {
+            updateStatus('STANDBY NETWORK', 'border-gray-800', 'bg-gray-500', 'text-gray-400');
+          }, buffer.duration * 1000 + 200);
+        }
+      } catch(e) {}
+    });
+  }
+
+  function subscribeToChannel(channelName) {
+    if (!client) return;
+    const newTopic = TOPIC_BASE + channelName;
+    if (currentSubscribedTopic && currentSubscribedTopic !== newTopic) {
+      client.unsubscribe(currentSubscribedTopic);
+    }
+    client.subscribe(newTopic, (err) => {
+      if (!err) currentSubscribedTopic = newTopic;
+    });
+  }
+
+  function changeChannel() {
+    currentChannel = document.getElementById('channel-select').value;
+    subscribeToChannel(currentChannel);
+    updateStatus('STANDBY NETWORK', 'border-gray-800', 'bg-gray-500', 'text-gray-400');
+    // Update media session metadata agar sesuai channel
+    if ('mediaSession' in navigator && navigator.mediaSession.metadata) {
+      navigator.mediaSession.metadata.album = currentChannel;
+    }
+  }
+
+  function updateStatus(text, borderClass, dotColor, textColor, isTalking = false) {
+    const st = document.getElementById('status-talk');
+    document.getElementById('status-text').innerText = text;
+    document.getElementById('status-text').className = `text-xs font-bold tracking-[0.2em] ${textColor}`;
+    document.getElementById('status-dot').className = `w-2.5 h-2.5 rounded-full animate-pulse status-dot ${dotColor}`;
+    st.className = `glass-panel rounded-full px-8 py-4 w-full flex items-center justify-center gap-4 transition-all duration-300 border ${borderClass} ${isTalking ? 'is-talking' : ''}`;
+  }
+
+  async function initAudioSystem() {
+    try {
+      globalStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      });
+      const pttBtn = document.getElementById('ptt-btn');
+
+      const start = (e) => { e.preventDefault(); startBroadcasting(); };
+      const stop = (e) => { e.preventDefault(); stopBroadcasting(); };
+
+      pttBtn.addEventListener('mousedown', start);
+      pttBtn.addEventListener('mouseup', stop);
+      pttBtn.addEventListener('mouseleave', stop);
+      pttBtn.addEventListener('touchstart', start, {passive: false});
+      pttBtn.addEventListener('touchend', stop, {passive: false});
+    } catch (err) { alert('Izin Mikrofon wajib!'); }
+  }
+
+  function startBroadcasting() {
+    if (isBroadcasting || !client || !globalStream) return;
+    isBroadcasting = true;
+
+    if (audioContext.state === 'suspended') audioContext.resume();
+
+    updateStatus(`TX: ${currentUser}`, 'border-red-500/50 shadow-[0_0_20px_rgba(220,38,38,0.3)]', 'bg-red-500', 'text-red-400', true);
+    document.getElementById('ptt-btn').classList.add('ptt-active');
+
+    audioStreamSource = audioContext.createMediaStreamSource(globalStream);
+    audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+
+    silenceNode = audioContext.createGain();
+    silenceNode.gain.value = 0;
+
+    audioStreamSource.connect(audioProcessor);
+    audioProcessor.connect(silenceNode);
+    silenceNode.connect(audioContext.destination);
+
+    const targetSampleRate = 16000;
+    const sampleRateRatio = audioContext.sampleRate / targetSampleRate;
+
+    audioProcessor.onaudioprocess = (e) => {
+      if (!isBroadcasting) return;
+
+      const inputData = e.inputBuffer.getChannelData(0);
+      const newLength = Math.floor(inputData.length / sampleRateRatio);
+      const int16Data = new Int16Array(newLength);
+
+      for (let i = 0; i < newLength; i++) {
+        const srcIdx = Math.floor(i * sampleRateRatio);
+        int16Data[i] = Math.max(-1, Math.min(1, inputData[srcIdx])) * 32767;
+      }
+
+      let binary = '';
+      const bytes = new Uint8Array(int16Data.buffer);
+      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+
+      client.publish(TOPIC_BASE + currentChannel, JSON.stringify({
+        type: 'live-audio', sender: currentUser, chunk: btoa(binary)
+      }), { qos: 0 });
+    };
+  }
+
+  function stopBroadcasting() {
+    if (!isBroadcasting) return;
+    isBroadcasting = false;
+
+    if (audioProcessor) {
+      audioStreamSource.disconnect();
+      audioProcessor.disconnect();
+      if (silenceNode) silenceNode.disconnect();
+    }
+    document.getElementById('ptt-btn').classList.remove('ptt-active');
+    updateStatus('STANDBY NETWORK', 'border-gray-800', 'bg-gray-500', 'text-gray-400');
+  }
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'));
+  }
+  </script>
+</body>
+</html>
